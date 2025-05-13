@@ -133,6 +133,149 @@ function DETECT_OS() {
   fi
 }
 
+# OPEN DOCKER DESKTOP IF NOT RUNNING
+function OPEN_DOCKER_DESKTOP() {
+  OS=$(DETECT_OS)
+
+  if [[ "$OS" == "macos" ]]; then
+    if ! pgrep -x "Docker" > /dev/null; then
+      echo "[INFO] ABRIENDO DOCKER DESKTOP..."
+      open -a "Docker"
+      while ! docker system info &>/dev/null; do
+        echo "[INFO] ESPERANDO A QUE DOCKER INICIE..."
+        sleep 2
+      done
+      echo "[INFO] DOCKER DESKTOP ESTÁ LISTO."
+    else
+      echo "[INFO] DOCKER DESKTOP YA ESTÁ ABIERTO."
+    fi
+
+  elif [[ "$OS" == "ubuntu" || "$OS" == "fedora" ]]; then
+    if ! pgrep -x "dockerd" > /dev/null; then
+      echo "[INFO] INICIANDO DOCKER..."
+      sudo systemctl start docker
+      while ! docker system info &>/dev/null; do
+        echo "[INFO] ESPERANDO A QUE DOCKER INICIE..."
+        sleep 2
+      done
+      echo "[INFO] DOCKER ESTÁ LISTO."
+    else
+      echo "[INFO] DOCKER YA ESTÁ CORRIENDO."
+    fi
+  else
+    echo "[ERROR] SISTEMA OPERATIVO NO SOPORTADO PARA ABRIR DOCKER DESKTOP."
+  fi
+}
+
+# STOP CONTAINERS BY NAME
+function DELETE_CONTAINERS_BY_NAME() {
+  local container_names=(
+    "frontend-survey-1"
+    "webhook"
+    "backend-web-1"
+    "backend-db-1"
+    "backend-postgres_exporter-1"
+    "metrics-grafana-1"
+    "metrics-prometheus-1"
+    "metrics-alertmanager-1"
+    "nginx_proxy"
+    "frontend_green"
+    "grafana_green"
+    "prometheus_green"
+    "alertmanager_green"
+    "backend-green-web_green-1"
+    "backend-green-db-green-1"
+    "backend-green-postgres_exporter_green-1"
+    "webhook_listener_green"
+  )
+
+  echo "[INFO] INTENTANDO ELIMINAR LOS CONTENEDORES ESPECIFICADOS..."
+
+  for name in "${container_names[@]}"; do
+    container_id=$(docker ps -a --filter "name=^${name}$" --format "{{.ID}}")
+
+    if [[ -n "$container_id" ]]; then
+      echo "[INFO] ELIMINANDO CONTENEDOR: $name ($container_id)"
+      docker rm -f "$container_id"
+      if [[ $? -eq 0 ]]; then
+        echo "[OK] CONTENEDOR '$name' ELIMINADO CORRECTAMENTE."
+      else
+        echo "[ERROR] NO SE PUDO ELIMINAR EL CONTENEDOR '$name'."
+      fi
+    else
+      echo "[WARN] NO SE ENCONTRÓ UN CONTENEDOR CON EL NOMBRE EXACTO: $name"
+    fi
+  done
+
+  echo "[INFO] ELIMINANDO VOLUMENES HUELLA DE CONTENEDORES ELIMINADOS..."
+  docker volume prune -f
+  echo "[INFO] LIMPIEZA COMPLETA DE VOLUMENES SIN USO."
+}
+
+# DELETE DOCKER VOLUMES AND IMAGES
+function DELETE_DOCKER_VOLUMES_AND_IMAGES() {
+  local volumes=(
+    "metrics_grafana_data"
+    "backend_backend_web_data"
+    "backend_postgres_data"
+    "metrics_green_grafana_data_green"
+    "backend-green_backend_web_data_green"
+    "backend-green_postgres_data_green"
+    "act-toolcache"
+  )
+
+  local images=(
+    "mysql:8"
+    "mysql:8.0"
+    "grafana/grafana:latest"
+    "ghcr.io/dimitri/pgloader:amd64"
+    "frontend-survey:latest"
+    "frontend_green-survey_green:latest"
+    "catthehacker/ubuntu:amd64"
+    "busybox:latest"
+    "backend-web:latest"
+    "backend-green-web_green:latest"
+    "backend-green-mysqld_exporter_green:latest"
+    "backend-green-db-green:latest"
+  )
+
+  echo "[INFO] ELIMINANDO VOLUMENES ESPECIFICADOS..."
+
+  for volume in "${volumes[@]}"; do
+    if docker volume ls --format "{{.Name}}" | grep -q "^${volume}$"; then
+      echo "[INFO] ELIMINANDO VOLUMEN: $volume"
+      docker volume rm "$volume"
+      if [[ $? -eq 0 ]]; then
+        echo "[OK] VOLUMEN '$volume' ELIMINADO CORRECTAMENTE."
+      else
+        echo "[ERROR] NO SE PUDO ELIMINAR EL VOLUMEN '$volume'."
+      fi
+    else
+      echo "[WARN] NO SE ENCONTRÓ EL VOLUMEN: $volume"
+    fi
+  done
+
+  echo "[INFO] ELIMINANDO IMÁGENES ESPECIFICADAS..."
+
+  for image in "${images[@]}"; do
+    if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${image}$"; then
+      echo "[INFO] ELIMINANDO IMAGEN: $image"
+      docker rmi -f "$image"
+      if [[ $? -eq 0 ]]; then
+        echo "[OK] IMAGEN '$image' ELIMINADA CORRECTAMENTE."
+      else
+        echo "[ERROR] NO SE PUDO ELIMINAR LA IMAGEN '$image'."
+      fi
+    else
+      echo "[WARN] NO SE ENCONTRÓ LA IMAGEN: $image"
+    fi
+  done
+
+  echo "[INFO] LIMPIEZA DE ELEMENTOS NO UTILIZADOS..."
+  docker system prune -f
+  echo "[OK] LIMPIEZA COMPLETADA."
+}
+
 # INSTALL DEPENDENCIES FOR SUPPORTED OS
 function INSTALL_DEPENDENCIES() {
   local OS
@@ -270,11 +413,11 @@ function MAIN_MENU() {
         echo "FINALIZANDO Y EJECUTANDO PIPELINE..."
         RUN_PIPELINE
         ;;
-      7) echo "SALIENDO SIN EJECUTAR PIPELINE.( + DETENER ENTORNO)"
-         ansible-playbook -i "localhost," "$SCRIPT_DIR/blue/stop_playbook.yml"
-         ansible-playbook -i "localhost," "$SCRIPT_DIR/green/stop_playbook.yml"
-          ansible-playbook -i "localhost," "$SCRIPT_DIR/proxy_conf/stop_playbook.yml"
-         exit 0 ;;
+      7)
+        echo "SALIENDO SIN EJECUTAR PIPELINE.( + DETENER ENTORNO)"
+        DELETE_CONTAINERS_BY_NAME
+        DELETE_DOCKER_VOLUMES_AND_IMAGES
+        exit 0 ;;
       *) echo "OPCIÓN INVÁLIDA. INTENTA DE NUEVO." ;;
     esac
     echo
@@ -303,5 +446,9 @@ if PROMPT_YES_NO "¿DESEAS AJUSTAR EL DOCKERFILE PARA TU ARQUITECTURA?"; then
   ADJUST_DOCKERFILE
 fi
 
+if PROMPT_YES_NO "¿DESEAS ABRIR DOCKER DESKTOP (EN CASO DE QUE NO LO POSEA INTRODUCE n?"; then
+  OPEN_DOCKER_DESKTOP
+fi
+
 # LAUNCH MAIN MENU
-#MAIN_MENU
+ MAIN_MENU
