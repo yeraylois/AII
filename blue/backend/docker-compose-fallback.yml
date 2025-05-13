@@ -1,0 +1,58 @@
+services:
+  web:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DATABASE_ENGINE: "mysql"
+      DATABASE_NAME: "mydatabase"
+      DATABASE_USER: "myuser"
+      DATABASE_PASSWORD: "mypassword"
+      DATABASE_HOST: "db"
+      DATABASE_PORT: "3306"
+    volumes:
+      - backend_web_data:/app    # VOLUME
+    ports:
+      - "8000:8000"
+    networks:
+      - my_network
+    depends_on:
+      - db
+
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+    command: [
+      "--default_authentication_plugin=mysql_native_password"
+    ]
+    environment:
+      MYSQL_DATABASE: mydatabase
+      MYSQL_USER: myuser
+      MYSQL_PASSWORD: mypassword
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3307:3306"  # INTERNAL:3306, EXTERNAL:3307
+    networks:
+      my_network:
+        aliases:
+        - db
+
+  mysqld_exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile.exporter
+    command:
+      - "--config.my-cnf=/root/my.cnf"
+    user: "0"  # EXECUTE AS ROOT TO GET PERMISSIONS
+    ports:
+      - "9104:9104" # INTERNAL:9104, EXTERNAL:9104
+    networks:
+      - my_network
+
+volumes:
+  mysql_data:
+  backend_web_data:
+
+networks:
+  my_network:
+    external: true

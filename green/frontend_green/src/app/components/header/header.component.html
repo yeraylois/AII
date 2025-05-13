@@ -1,0 +1,39 @@
+<header class="site-header">
+  <div class="container">
+    <div class="logo">
+      <a routerLink="/index">SURVEYS</a>
+    </div>
+    <nav class="nav">
+      <ul>
+        <!-- IF THE USER ISN'T AUTHENTICATED, SHOW 'LOGIN' -->
+        <li *ngIf="!authService.isAuthenticated()">
+          <a routerLink="/login">LOGIN</a>
+        </li>
+        <!-- IF THE USER IS AUTHENTICATED, SHOW THE PROFILE-ICON -->
+        <li *ngIf="authService.isAuthenticated()" class="profile-dropdown" (click)="toggleDropdown()">
+          <img ngSrc="assets/profile.svg" alt="Profile-Image" class="profile-icon" height="16"
+               width="16"/>
+
+          <ul class="dropdown-menu" [ngClass]="{'open': isDropdownOpen}">
+            <li>USERNAME: {{ authService.user?.username }}</li>
+            <li>EMAIL: {{ authService.user?.email }}</li>
+            <li class="logout">
+
+              <!-- THE $event.stopPropagation() AVOIDS THE DROPDOWN TO CLOSE IMMEDIATELY -->
+              <a (click)="logoutAndReload(); $event.stopPropagation()">Cerrar sesión</a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- IF NEED MORE PARAMETERS, ADD HERE
+
+        <li>
+          <a routerLink="/faq">FAQ</a>
+        </li>
+
+        -->
+
+      </ul>
+    </nav>
+  </div>
+</header>

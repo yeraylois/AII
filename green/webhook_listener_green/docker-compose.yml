@@ -1,0 +1,17 @@
+services:
+  webhook_green:
+    build:
+      context: ../
+      dockerfile: webhook_listener_green/Dockerfile
+    container_name: webhook_listener_green
+    ports:
+      - "8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # ALLOWS DOCKER SOCKET
+    networks:
+      - green_network
+    restart: always
+
+networks:
+  green_network:
+    external: true

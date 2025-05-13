@@ -1,0 +1,21 @@
+groups:
+  - name: postgres_alerts
+    rules:
+      - alert: PostgreSQLDown
+        expr: (pg_up == 0) and on() (active_backend{engine="postgres"} == 1)
+        for: 20s
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL inactivo"
+          description: "PostgreSQL no responde. (Timeout: 20s)."
+
+      - alert: MySQLDown
+        expr: (mysql_up == 0) and on() (active_backend{engine="mysql"} == 1)
+        for: 20s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL inactivo"
+          description: "MySQL no responde. (Timeout: 20s)."
+          

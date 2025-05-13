@@ -1,0 +1,37 @@
+LOAD DATABASE
+  FROM mysql://myuser:mypassword@temp-mysql-green/mydatabase
+  INTO postgresql://myuser:mypassword@backend-green-db-green-1:5432/mydatabase
+
+ WITH include drop,          -- DROP + CASCADE antes de recrear
+      create tables,         -- Generar DDL de tablas
+      create indexes,        -- Generar índices
+      reset sequences,       -- Ajustar secuencias al final
+      foreign keys,          -- Crear claves foráneas
+      workers = 8,           -- Lectores en paralelo
+      concurrency = 1,       -- Escritura única
+      multiple readers per thread,
+      rows per range = 50000
+
+  SET PostgreSQL PARAMETERS
+      maintenance_work_mem to '128MB',
+      work_mem to '12MB',
+      search_path to 'mydatabase, public, "$user"'
+
+  SET MySQL PARAMETERS
+      net_read_timeout  = '120',
+      net_write_timeout = '120'
+
+  CAST
+      type tinyint when (= precision 1) to boolean drop typemod using tinyint-to-boolean,
+      type tinyint to smallint drop typemod,
+
+      type datetime to timestamptz drop not null drop default using zero-dates-to-null,
+      type timestamp to timestamptz drop not null drop default using zero-dates-to-null,
+      type date to date drop default using zero-dates-to-null,
+      type year to integer drop typemod
+
+  ALTER SCHEMA 'mydatabase' RENAME TO 'public'
+
+BEFORE LOAD DO
+   $$ create schema if not exists mydatabase; $$,
+   $$ set search_path = mydatabase, public; $$;

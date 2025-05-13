@@ -1,0 +1,396 @@
+- name: Deploy Environment According to Mode (GREEN)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    # POR DEFECTO: se usa el entorno PostgreSQL (init)
+    init: false        # Cuando es true: despliega front, backend-green con PostgreSQL y exportador PostgreSQL.
+    alert: false       # Cuando es true: detiene el backend-green actual y despliega backend-green con MySQL y exportador MySQL.
+    reset: false       # Cuando es true: detiene el backend-green MySQL y re-despliega backend-green con PostgreSQL y exportador PostgreSQL.
+
+    # Variables referentes a la base de datos PostgreSQL de Blue
+    green_pg_container: "backend-green-db-green-1"
+    pg_user: "myuser"
+    pg_database: "mydatabase"
+    pg_password: "mypassword"
+
+    # Variables referentes al contenedor de MySQL de fallback
+    fallback_mysql_container: "backend-green-db-green-1"
+    mysql_user: "myuser"
+    mysql_password: "mypassword"
+    mysql_database: "mydatabase"
+    mysql_root: "root"
+    mysql_root_password: "rootpassword"
+
+    dump_file: "postgreSQLtoMySQL/pg_dump.sql"            # Archivo de volcado PostgreSQL
+    mysql_dump_file: "postgreSQLtoMySQL/mysql_dump.sql"   # Archivo de volcado MySQL
+    mysql_engine: "InnoDB"                                # Motor de almacenamiento MySQL
+
+    script_correction: "postgreSQLtoMySQL/script_correction.py" # Script para corrección de datos
+
+  tasks:
+    - name: Show current modes
+      debug:
+        msg: "init={{ init }}, alert={{ alert }}, reset={{ reset }}"
+
+    # -------------------
+    # MODO INIT: Desplegar entorno con PostgreSQL
+    - name: Deploy Frontend_Green (INIT)
+      community.docker.docker_compose_v2:
+        project_src: frontend_green
+        files:
+          - docker-compose.yml
+      when: init | bool
+
+    - name: Deploy Webhook_Green (INIT)
+      community.docker.docker_compose_v2:
+        project_src: webhook_listener_green
+        files:
+          - docker-compose.yml
+      when: init | bool
+
+    - name: Deploy backend-green with PostgreSQL and PostgreSQL exporter (INIT)
+      community.docker.docker_compose_v2:
+        project_src: backend-green      # Directorio para PostgreSQL, backend-green y exportador (Postgres)
+        files:
+          - docker-compose.yml
+      when: init | bool
+
+    - name: Deploy Metrics (INIT)
+      community.docker.docker_compose_v2:
+        project_src: metrics_green
+        files:
+          - docker-compose.yml
+      when: init | bool
+
+    # =============================================================================================================== #
+    # MODO ALERT: Se detecta alerta y se activa fallback (MySQL)
+    - name: Restart docker backend-db-1 container to export data (ALERT)
+      ansible.builtin.command: docker start backend-green-db-green-1
+      register: start_result
+      changed_when: start_result.rc == 0 and "'backend-green-db-green-1'" in start_result.stdout
+      when: alert | bool
+
+    - name: Export data from PostgreSQL to file (ALERT)
+      shell: |
+        export PGPASSWORD="{{ pg_password }}"
+        docker exec {{ green_pg_container }} \
+          pg_dump -U {{ pg_user }} {{ pg_database }} > {{ dump_file }}
+      register: pg_dump_result
+      failed_when: pg_dump_result.rc != 0
+      when: alert | bool
+
+    - name: Convert PostgreSQL dump to MySQL format (ALERT)
+      # TOOL: pg2mysql (Convierte el volcado de PostgreSQL a MySQL)
+      shell: |
+        php ./pg2mysql-1.9/pg2mysql_cli.php \
+          {{ dump_file }} {{ mysql_dump_file }} {{ mysql_engine }}
+      register: pg2mysql_result
+      failed_when: pg2mysql_result.rc != 0
+      when: alert | bool
+
+    - name: Remove the prefix 'public.' from the MySQL dump
+      shell: sed -i 's/public\.//g' {{ mysql_dump_file }}
+      when: alert | bool
+
+    - name: Modify the MySQL dump to set 'last_login' to NULL (ALERT)
+      ansible.builtin.replace:
+        path: "{{ mysql_dump_file }}"
+        regexp: '(`last_login`[^,]*) NOT NULL'
+        replace: '\1 NULL DEFAULT NULL'
+      when: alert | bool
+
+    - name: Stop and Remove the Stack of Backend with PostgreSQL & PostgreSQL exporter (RUNNING-MODE)
+      community.docker.docker_compose_v2:
+        project_src: backend-green
+        files:
+          - docker-compose.yml
+        state: absent
+      when: alert | bool
+
+    - name: Deploy backend-green with MySQL and mysqld_exporter (FALLBACK)
+      community.docker.docker_compose_v2:
+        project_src: backend-green   # Directorio para fallback, con docker-compose-fallback.yml
+        files:
+          - docker-compose-fallback.yml
+      when: alert | bool
+
+    - name: Wait for MySQL to be ready (ALERT)
+      pause:
+        seconds: 5
+      when: alert | bool
+
+    - name: Drop and create the MySQL database (ALERT)
+      shell: |
+        docker run --rm --network green_network mysql:8 \
+          mysql -h {{ fallback_mysql_container }} -u root -p'{{ mysql_root_password }}' -e "
+            DROP DATABASE IF EXISTS {{ mysql_database }};
+            CREATE DATABASE {{ mysql_database }}
+              CHARACTER SET utf8mb4
+              COLLATE utf8mb4_unicode_ci;
+          "
+      register: drop_create
+      retries: 8        # reintenta hasta 8 veces
+      delay: 5          # espera 5s entre cada intento
+      until: drop_create.rc == 0
+      when: alert | bool
+
+    - name: Post‑process the MySQL dump (e.g. AUTO_INCREMENT, timestamps)
+      shell: python ./postgreSQLtoMySQL/prepare_database.py {{ mysql_dump_file }} {{ mysql_dump_file }}
+      when: alert | bool
+
+    - name: Import the MySQL dump into the MySQL database (ALERT)
+      shell: |
+        cat {{ mysql_dump_file }} | \
+        docker run --rm --network green_network -i mysql:8 \
+          mysql -h {{ fallback_mysql_container }} -u root -p'{{ mysql_root_password }}' --force {{ mysql_database }}
+      when: alert | bool
+
+    - name: Remove all dump files (ALERT)
+      shell: |
+        rm -f {{ dump_file }}
+        rm -f {{ mysql_dump_file }}
+      when: alert | bool
+
+    # =============================================================================================================== #
+    # MODO RESET: Se detiene el backend-green fallback y se reinicia PostgreSQL
+
+    - name: Run docker backend-green-db-green-1 container to export data (RESET)
+      ansible.builtin.command: docker start backend-green-db-green-1
+      register: start_result
+      changed_when: start_result.rc == 0 and "'backend-green-db-green-1'" in start_result.stdout
+      when: reset | bool
+
+    - name: Wait for MySQL container to be ready (RESET)
+      pause:
+        seconds: 5
+      when: reset | bool
+
+    - name: Export data from MySQL to file (RESET)
+      block:
+        - name: Do MySQL dump (RESET)
+          shell: |
+            docker exec {{ fallback_mysql_container }} \
+              mysqldump -u {{ mysql_root }} -p'{{ mysql_root_password }}' {{ mysql_database }} > {{ dump_file }}
+          register: mysql_dump_result
+          failed_when: mysql_dump_result.rc != 0
+          when: reset | bool
+
+    #DEBUG
+    #- name: Log output of MySQL dump
+    #  ansible.builtin.copy:
+    #    content: "{{ mysql_dump_result.stdout }}\n{{ mysql_dump_result.stderr }}"
+    #    dest: "logs/mysql_dump_result.log"
+    #  when: reset | bool
+
+    - name: Deploy Temporary MySQL container (RESET)
+      shell: |
+        docker run --name temp-mysql-green --network green_network \
+          -e MYSQL_ROOT_PASSWORD={{ mysql_root_password }} \
+          -e MYSQL_DATABASE={{ mysql_database }} \
+          -e MYSQL_USER={{ mysql_user }} \
+          -e MYSQL_PASSWORD={{ mysql_password }} \
+          -d mysql:8.0 \
+          --default-authentication-plugin=mysql_native_password
+      register: temp_mysql_result
+      failed_when: temp_mysql_result.rc != 0
+      when: reset | bool
+
+    #DEBUG
+    #- name: Log result of temp MySQL container startup
+    #  ansible.builtin.copy:
+    #    content: "{{ temp_mysql_result.stdout }}\n{{ temp_mysql_result.stderr }}"
+    #    dest: "logs/temp_mysql_start.log"
+    #  when: reset | bool
+
+    - name: Wait for MySQL to be ready after startup (RESET)
+      pause:
+        seconds: 5
+      when: reset | bool
+
+    - name: Create custom MySQL configuration file (RESET)
+      shell: |
+        docker exec temp-mysql-green bash -c "echo '[mysqld]' > /etc/mysql/conf.d/custom.cnf && \
+          echo 'bind-address = 0.0.0.0' >> /etc/mysql/conf.d/custom.cnf && \
+          echo 'default_authentication_plugin = mysql_native_password' >> /etc/mysql/conf.d/custom.cnf"
+      register: custom_conf_result
+      failed_when: custom_conf_result.rc != 0
+      when: reset | bool
+
+    - name: Restart MySQL container to apply custom configuration (RESET)
+      shell: docker restart temp-mysql-green
+      register: restart_result
+      failed_when: restart_result.rc != 0
+      when: reset | bool
+
+    - name: Wait for MySQL to be ready after restart (RESET)
+      pause:
+        seconds: 5
+      when: reset | bool
+
+    - name: Change authentication method for MySQL user (RESET)
+      shell: |
+        docker exec temp-mysql-green mysql -uroot -p'{{ mysql_root_password }}' -e "ALTER USER '{{ mysql_user }}'@'%' IDENTIFIED WITH mysql_native_password BY '{{ mysql_password }}'; FLUSH PRIVILEGES;"
+      register: mysql_alter_auth
+      failed_when: mysql_alter_auth.rc != 0
+      when: reset | bool
+
+    - name: Copy the dump file to the temporary MySQL container (RESET)
+      shell: docker cp {{ dump_file }} temp-mysql-green:/tmp/pg_dump.sql
+      register: docker_cp_result
+      failed_when: docker_cp_result.rc != 0
+      when: reset | bool
+
+    - name: Import the PostgreSQL dump into MySQL (RESET)
+      shell: |
+        docker exec -i temp-mysql-green bash -c \
+          "mysql --protocol=TCP -h 127.0.0.1 -u root -p'{{ mysql_root_password }}' {{ mysql_database }} < /tmp/pg_dump.sql" \
+          2>&1 | tee /tmp/mysql_import_raw.log
+      register: temp_mysql_import
+      failed_when: temp_mysql_import.rc != 0
+      when: reset | bool
+
+    #DEBUG
+    #- name: Copy log of MySQL import
+    #  copy:
+    #    src: /tmp/mysql_import_raw.log
+    #    dest: "logs/mysql_import.log"
+    #  delegate_to: localhost
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Verify MySQL import
+    #  shell: |
+    #    docker exec temp-mysql-green mysql \
+    #      -uroot -p'{{ mysql_root_password }}' \
+    #      -e "SHOW TABLES IN {{ mysql_database }};"
+    #  register: temp_mysql_tables1
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Log tables of temp-mysql-green
+    #   copy:
+    #    dest: logs/temp_mysql_tables1.log
+    #    content: "{{ temp_mysql_tables1.stdout }}"
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Verify row counts by table in temp-mysql-green
+    #  shell: |
+    #    docker exec temp-mysql-green mysql \
+    #      -uroot -p'{{ mysql_root_password }}' \
+    #      -e "
+    #      SELECT table_name, table_rows
+    #        FROM information_schema.tables
+    #       WHERE table_schema='{{ mysql_database }}';
+    #      "
+    #  register: temp_mysql_counts1
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Log row counts of temp-mysql-green
+    #  copy:
+    #    dest: logs/temp_mysql_counts1.log
+    #    content: "{{ temp_mysql_counts1.stdout }}"
+    #  when: reset | bool
+
+    - name: Remove the dump file from the temporary MySQL container (RESET)
+      shell: docker exec -i temp-mysql-green rm /tmp/pg_dump.sql
+      when: reset | bool
+
+    - name: Stop and Remove the Stack of backend-green with MySQL (RUNNING-MODE)
+      community.docker.docker_compose_v2:
+        project_src: backend-green
+        files:
+          - docker-compose-fallback.yml
+        state: absent
+      when: reset | bool
+
+    - name: Deploy backend-green with PostgreSQL and PostgreSQL exporter (FALLBACK)
+      community.docker.docker_compose_v2:
+        project_src: backend-green
+        files:
+          - docker-compose.yml
+      when: reset | bool
+
+    - name: Wait for PostgreSQL to be ready (RESET)
+      pause:
+        seconds: 5
+      when: reset | bool
+
+    #DEBUG
+    #- name: Verify MySQL import
+    #  shell: |
+    #    docker exec temp-mysql-green mysql \
+    #      -uroot -p'{{ mysql_root_password }}' \
+    #      -e "SHOW TABLES IN {{ mysql_database }};"
+    #  register: temp_mysql_tables2
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Log tables of temp-mysql-green
+    #  copy:
+    #    dest: logs/temp_mysql_tables2.log
+    #    content: "{{ temp_mysql_tables2.stdout }}"
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Verify row counts by table in temp-mysql-green
+    #  shell: |
+    #    docker exec temp-mysql-green mysql \
+    #      -uroot -p'{{ mysql_root_password }}' \
+    #      -e "
+    #      SELECT table_name, table_rows
+    #        FROM information_schema.tables
+    #       WHERE table_schema='{{ mysql_database }}';
+    #      "
+    #  register: temp_mysql_counts2
+    #  when: reset | bool
+
+    #DEBUG
+    #- name: Log row counts of temp-mysql-green
+    #  copy:
+    #    dest: logs/temp_mysql_counts2.log
+    #    content: "{{ temp_mysql_counts2.stdout }}"
+    #  when: reset | bool
+
+    - name: Set 'django_migrations' and 'auth_user' columns to NULL (RESET)
+      shell: |
+        export PGPASSWORD="{{ pg_password }}"
+        docker exec -i {{ green_pg_container }} psql -U {{ pg_user }} -d {{ pg_database }} -c "
+          ALTER TABLE django_migrations ALTER COLUMN applied   DROP NOT NULL;
+          ALTER TABLE auth_user        ALTER COLUMN date_joined DROP NOT NULL;
+        "
+      when: reset | bool
+
+    - name: Migrate the database from MySQL to PostgreSQL (RESET)
+      shell: |
+        cat "{{ playbook_dir }}/postgreSQLtoMySQL/mysql2pg.load" | \
+        docker run --rm --platform linux/amd64 --network green_network -i \
+          ghcr.io/dimitri/pgloader:latest \
+          pgloader /dev/stdin
+      register: pgloader_result
+      when: reset | bool
+
+    - name: Stop and Remove the Temporary MySQL container (RESET)
+      shell: docker rm -f temp-mysql-green
+      when: reset | bool
+
+    - name: Remove all dump files (ALERT)
+      shell: |
+        rm -f {{ dump_file }}
+        rm -f {{ mysql_dump_file }}
+      when: alert | bool
+
+    # =============================================================================================================== #
+    #DEBUG
+    #- name: Mostrar modo fallback
+    #  debug:
+    #    msg: "FALLBACK ACTIVADO"
+    #  when: fallback_mode | bool
+
+    #DEBUG
+    #- name: Mostrar modo reset
+    #  debug:
+    #    msg: "RESET ACTIVADO"
+    #  when: reset | bool

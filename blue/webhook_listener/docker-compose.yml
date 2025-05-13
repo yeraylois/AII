@@ -1,0 +1,17 @@
+services:
+  webhook:
+    build:
+      context: ../
+      dockerfile: webhook_listener/Dockerfile
+    container_name: webhook
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # ALLOWS DOCKER SOCKET
+    networks:
+      - my_network
+    restart: always
+
+networks:
+  my_network:
+    external: true

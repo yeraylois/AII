@@ -1,0 +1,112 @@
+name: Blue-Green Deployment Pipeline
+
+#THE .vars FILE IS LOADED
+on:
+  push:
+    paths:
+      - ".vars"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Configure Python, Install Ansible and Requests
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade pip setuptools
+          pip install ansible
+          pip install requests
+          pip install docker 
+
+      - name: Create Docker Networks(If Not Exist)
+        run: |
+          for net in my_network green_network; do
+            if ! docker network inspect "$net" >/dev/null 2>&1; then
+              docker network create "$net"
+            fi
+          done
+
+      - name: Read .vars File
+        id: read_vars
+        run: |
+          echo "Reading file: .vars..."
+          
+          # WE LOOP THROUGH THE FILE ASSUMING EACH LINE HAS THE FORMAT 'KEY=VALUE'
+          while IFS='=' read -r key value; do
+          
+            # IGNORE LINES THAT ARE EMPTY OR START WITH '#' (COMMENT)
+            if [[ -n "$key" && "$key" != \#* ]]; then
+              echo "$key=$value" >> $GITHUB_ENV
+            fi
+          
+          done < .vars
+          echo "Environment to deploy: ${{ env.deploy_env }}"
+          echo "Activate Tests: ${{ env.run_tests }}"
+
+      - name: Execute tests -> (run_tests == true)
+        if: ${{ env.run_tests == 'true' }}
+        run: |
+          echo "Executing tests for environment ${env.deploy_env}..."
+          
+          # TODO: TESTS RUN
+          # EXAMPLE: ansible-playbook --check ${{ env.deploy_env }}/playbook.yml
+
+      - name: Deploy Blue-Green
+        run: |
+          
+          # DEPLOYMENT BASED ON THE VARIABLE (.vars)
+          if [ "${{ env.deploy_env }}" = "green" ]; then
+            echo "Starting deployment of GREEN..."
+            
+            # DEPLOY GREEN VERSION
+            ansible-playbook ${{ env.deploy_env }}/${{ env.deploy_env }}_playbook.yml --extra-vars "init=true"
+          
+            # TRANSFER DATA FROM BLUE TO GREEN
+            ansible-playbook check/check/check_blue_playbook.yml
+            
+            # UPDATE NGINX PROXY (POINT TO GREEN)
+            ansible-playbook ${{ env.deploy_env }}/update_nginx_proxy.yml 
+          
+          
+          elif [ "${{ env.deploy_env }}" = "blue" ]; then
+            echo "Stopping GREEN deployment..."
+            
+            # STOP BLUE VERSION (for sure PostgreSQL running)
+            ansible-playbook ${{ env.deploy_env }}/stop_playbook.yml
+          
+            # DEPLOY BLUE VERSION
+            ansible-playbook ${{ env.deploy_env }}/${{ env.deploy_env }}_playbook.yml --extra-vars "init=true"
+
+            # TRANSFER DATA FROM GREEN TO BLUE
+            ansible-playbook check/check/check_green_playbook.yml 
+          
+            # RESTORE NGINX PROXY (POINT TO BLUE)
+            ansible-playbook green/restore_nginx_proxy.yml
+          
+            # STOP GREEN VERSION
+            ansible-playbook green/stop_playbook.yml 
+            
+          elif [ "${{ env.deploy_env }}" = "init" ]; then
+            echo "Starting deployment of INIT..."
+            
+            # DEPLOY INIT VERSION
+            ansible-playbook blue/blue_playbook.yml --extra-vars "init=true"
+            
+            # MOVE TO PROXY CONF DIRECTORY
+            cd proxy_conf
+          
+            # DEPLOY NGINX PROXY (POINT TO BLUE)
+            ansible-playbook deploy_proxy_playbook.yml
+          
+          else
+            echo "The value of deploy_env '${{ env.deploy_env }}' is not valid. Use 'init', 'green' or 'blue'."
+            exit 1
+          fi

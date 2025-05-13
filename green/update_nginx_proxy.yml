@@ -1,0 +1,29 @@
+- name: Switch Nginx upstream from blue → green
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    nginx_conf: "{{ playbook_dir }}/../proxy_conf/nginx.conf"
+
+  tasks:
+    - name: Replace upstream to green_frontend
+      ansible.builtin.replace:
+        path: "{{ nginx_conf }}"
+        regexp: 'server\s+\S+:4200;'
+        replace: '        server green_frontend:4200;'
+        backup: yes
+
+    - name: Ensure file ends with a single "}"
+      ansible.builtin.lineinfile:
+        path: "{{ nginx_conf }}"
+        regexp: '^}$'
+        insertafter: EOF
+        line: '}'
+
+    - name: Copy updated nginx.conf into the running container
+      ansible.builtin.command: >
+        docker cp {{ nginx_conf }} nginx_proxy:/etc/nginx/nginx.conf
+
+    - name: Reload nginx inside the container
+      ansible.builtin.command: docker exec nginx_proxy nginx -s reload

@@ -1,0 +1,37 @@
+- name: Remove Green Deployment Containers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # LIST OF NAMES OF CONTAINERS USED IN THE DEPLOYMENT ENVIRONMENT
+    deployment_containers:
+      - grafana_green
+      - prometheus_green
+      - alertmanager_green
+      - backend-green-web_green-1
+      - backend-green-db-green-1
+      - backend-green-postgres_exporter_green-1
+      - webhook_listener_green
+      - frontend_green
+      - backend-green-mysqld_exporter_green-1
+
+  tasks:
+    - name: Show current deployment containers
+      debug:
+        msg: "Se intentará eliminar los contenedores: {{ deployment_containers }}"
+
+    - name: Remove Container if Exists
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ deployment_containers }}"
+      ignore_errors: yes
+      # WITH 'ignore_errors:' CONTINUE IF CONTAINER NOT FOUND/EXISTS
+
+    - name: Show Remaining Containers
+      command: docker ps -a --format "{{ '{{.Names}}' }}"
+      register: docker_list
+
+    - name: List Remaining Containers
+      debug:
+        msg: "Contenedores restantes en el host: {{ docker_list.stdout_lines }}"

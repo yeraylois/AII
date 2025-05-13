@@ -1,0 +1,28 @@
+- name: Configure nginx.conf to point to blue (init)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    nginx_conf_host: "{{ playbook_dir }}/nginx.conf"
+  tasks:
+    - name: Replace server line in the **host** file
+      ansible.builtin.replace:
+        path: "{{ nginx_conf_host }}"
+        regexp: 'server\s+.*:4200;'
+        replace: 'server blue_frontend:4200;'
+        backup: yes
+
+    - name: Build and start Docker Compose (Nginx->blue) from the host dir
+      community.docker.docker_compose_v2:
+        project_src: "{{ playbook_dir }}"
+        files:
+          - docker-compose-proxy.yml
+
+    - name: Copy nginx.conf into the running container
+      ansible.builtin.command: >
+        docker cp
+          {{ playbook_dir }}/nginx.conf
+          nginx_proxy:/etc/nginx/nginx.conf
+
+    - name: Reload nginx inside the container
+      ansible.builtin.command: docker exec nginx_proxy nginx -s reload

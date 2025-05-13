@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+
+:host {
+  display: block;
+  font-family: 'Inter', sans-serif;
+  background: linear-gradient(135deg, #23153c, #ff3f81);
+  min-height: 100vh;
+}
+
+.survey-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  min-height: 100vh;
+
+}
+
+.survey-container h2 {
+  font-size: 2rem;
+  margin-bottom: 1.5rem;
+  color: #fff;
+}
+
+.survey-container form {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 600px;
+  width: 100%;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+  color: #fff;
+}
+
+.survey-container form div {
+  margin-bottom: 1.5rem;
+}
+
+.survey-container form p {
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+}
+
+.survey-container form input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 1rem;
+  outline: none;
+  transition: border 0.3s ease;
+}
+
+.survey-container form input:focus {
+  border-color: #ff3f81;
+}
+
+.survey-container form button {
+  width: 100%;
+  padding: 0.75rem;
+  background: linear-gradient(45deg, #23153c, #ff3f81);
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  color: #fff;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background 0.3s ease, transform 0.3s ease;
+}
+
+.survey-container form button:hover {
+  transform: translateY(-3px);
+  background: linear-gradient(45deg, #ff3f81, #23153c);
+}
+

@@ -1,0 +1,57 @@
+- name: 1] Create logs directory
+  file:
+    path: "{{ logs_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: 2] Dump the BLUE PostgreSQL database
+  shell: |
+    export PGPASSWORD="{{ pg_password }}"
+    docker exec {{ blue_pg_container }} \
+      pg_dump -U {{ pg_user }} \
+              --format=plain \
+              --clean \
+              --if-exists \
+              {{ pg_database }} > {{ dump_file }} 2>&1
+  register: dump_blue
+  failed_when: dump_blue.rc != 0
+
+- name: 3] Save the dump log
+  copy:
+    dest: "{{ logs_dir }}/dump_blue.log"
+    content: |
+      
+      return code: {{ dump_blue.rc }}
+
+      === STDOUT/STDERR ===
+      {{ dump_blue.stdout }}
+
+- name: 4] Import the dump into the GREEN PostgreSQL container
+  shell: |
+    cat {{ dump_file }} | \
+      docker exec -i {{ green_pg_container }} \
+        tee /tmp/pg_dump.sql > /dev/null
+
+    docker exec {{ green_pg_container }} \
+      psql -U {{ pg_user }} -d {{ pg_database }} -f /tmp/pg_dump.sql \
+        > {{ dump_file }}.import.log 2>&1
+  register: import_green
+  failed_when: import_green.rc != 0
+
+- name: 5] Save the import log
+  copy:
+    dest: "{{ logs_dir }}/import_green.log"
+    content: |
+      
+      return code: {{ import_green.rc }}
+
+      === IMPORT LOG ===
+      {{ lookup('file', dump_file + '.import.log') }}
+
+- name: 6] Clean up dump files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ dump_file }}"
+    - "{{ dump_file }}.import.log"

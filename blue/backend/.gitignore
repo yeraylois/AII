@@ -1,0 +1,30 @@
+# PYTHON FILES
+*.py[cod]
+__pycache__/
+
+# VIRTUAL ENVIRONMENTS
+venv/
+ENV/
+env/
+.venv/
+
+# DATABASE FILES
+db.sqlite3
+
+# LOG FILES
+*.log
+
+# LOCAL CONFIGURATION FILES (IDE)
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# MacOS FILES
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# OTHER TEMPORARY FILES
+*~
+*.swp

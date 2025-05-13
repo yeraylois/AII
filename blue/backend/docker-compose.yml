@@ -1,0 +1,49 @@
+networks:
+  my_network:
+    external: true
+
+services:
+  web:
+    build: .
+    command: bash -c "/wait-for-it.sh db:5432 -t 60 && python manage.py migrate --fake-initial && python manage.py runserver 0.0.0.0:8000"
+    environment:
+      DATABASE_ENGINE: "postgresql"
+      DATABASE_NAME: "mydatabase"
+      DATABASE_USER: "myuser"
+      DATABASE_PASSWORD: "mypassword"
+      DATABASE_HOST: "db"
+      DATABASE_PORT: "5432"
+    volumes:
+      - backend_web_data:/app    # VOLUME
+    ports:
+      - "8000:8000"
+    networks:
+      - my_network
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    networks:
+      - my_network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # INTERNAL:5432, EXTERNAL: 5432
+
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://myuser:mypassword@db:5432/mydatabase?sslmode=disable"
+    networks:
+      - my_network
+    ports:
+      - "9187:9187" # INTERNAL:9187, EXTERNAL: 9187
+
+volumes:
+  postgres_data:
+  backend_web_data:

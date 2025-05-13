@@ -1,0 +1,14 @@
+services:
+  survey_green:
+    build: .
+    container_name: frontend_green
+    ports:
+      - "4202:4200"
+    networks:
+      green_network:
+        aliases:
+          - green_frontend  # ALIAS FOR GREEN CONTAINERS TO COMMUNICATE VIA THIS NETWORK (e.g., Nginx)
+
+networks:
+  green_network:
+    external: true

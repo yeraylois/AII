@@ -1,0 +1,30 @@
+<app-header></app-header>
+<div class="auth-container">
+  <div class="auth-card">
+    <h2>LOGIN</h2>
+    <form [formGroup]="loginForm" (ngSubmit)="onSubmit()">
+      <div class="input-group">
+        <input type="email" formControlName="email" placeholder=" " required />
+        <label>Email or Username</label>
+      </div>
+      <div class="input-group">
+        <input type="password" formControlName="password" placeholder=" " required />
+        <label>Password</label>
+      </div>
+      <button type="submit" class="cta-btn">LOGIN</button>
+    </form>
+    <p>
+      Don't have an account?
+      <a routerLink="/register">Register</a>
+    </p>
+  </div>
+
+  <app-custom-snackbar
+    *ngIf="showSnackbar"
+    [message]="snackbarMessage"
+    (close)="showSnackbar = false">
+  </app-custom-snackbar>
+
+</div>
+
+<app-footer></app-footer>

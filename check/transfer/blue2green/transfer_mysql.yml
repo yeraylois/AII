@@ -1,0 +1,123 @@
+- name: 1] Create logs directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/logs"
+    state: directory
+    mode: '0755'
+
+- name: 2] Do a MySQL blue dump into a file
+  shell: |
+    docker exec {{ blue_mysql_container }} \
+      mysqldump -u{{ mysql_root }} -p'{{ mysql_root_password }}' {{ mysql_database }} > {{ dump_file }}
+  register: mysql_dump_transfer
+  failed_when: mysql_dump_transfer.rc != 0
+
+- name: 3] Create a temporary MySQL container (temp-mysql-transfer)
+  shell: |
+    docker run --name temp-mysql-transfer --network {{ blue_mysql_network }} \
+      -e MYSQL_ROOT_PASSWORD={{ mysql_root_password }} \
+      -e MYSQL_DATABASE={{ mysql_database }} \
+      -e MYSQL_USER={{ mysql_user }} \
+      -e MYSQL_PASSWORD={{ mysql_password }} \
+      -d mysql:8.0 --default-authentication-plugin=mysql_native_password
+  register: temp_mysql_transfer
+  failed_when: temp_mysql_transfer.rc != 0
+
+- name: 4] Wait for the temporary MySQL container to be ready (5s)
+  pause:
+    seconds: 5
+
+- name: 5] Copy the dump file to the temporary MySQL container
+  shell: docker cp {{ dump_file }} temp-mysql-transfer:/tmp/dump.sql
+  retries: 8        # REINTENTA 8 VECES
+  delay: 5          # ESPERA 5s ENTRE CADA INTENTO
+  register: cp_dump_transfer
+  failed_when: cp_dump_transfer.rc != 0
+
+- name: 6] Wait for MySQL to accept connections
+  shell: |
+    until docker exec temp-mysql-transfer mysqladmin ping -uroot -p'{{ mysql_root_password }}' --silent; do
+      sleep 2
+    done
+  retries: 5
+  delay: 2
+  register: wait_mysql
+  until: wait_mysql.rc == 0
+
+- name: 7] Import the dump file into the temporary MySQL container
+  shell: |
+    docker exec -i temp-mysql-transfer bash -c "\
+      mysql --protocol=TCP -h127.0.0.1 \
+            -uroot -p'{{ mysql_root_password }}' {{ mysql_database }} \
+            < /tmp/dump.sql\
+    "
+  retries: 5
+  delay: 5
+  register: temp_mysql_import
+  failed_when: temp_mysql_import.rc != 0
+
+- name: 8] Remove the dump file from the temporary MySQL container
+  file:
+    path: "{{ dump_file }}"
+    state: absent
+
+- name: 9] Adjust 'NOT NULL' for Django
+  shell: |
+    export PGPASSWORD="{{ pg_password }}"
+    docker exec {{ green_pg_container }} psql -U {{ pg_user }} -d {{ pg_database }} -c "
+      ALTER TABLE auth_user        ALTER COLUMN date_joined DROP NOT NULL;
+      ALTER TABLE django_migrations ALTER COLUMN applied     DROP NOT NULL;
+    "
+
+- name: 10] Create pgloader configuration file
+  copy:
+    dest: "{{ playbook_dir }}/mysql2pg.load"
+    content: |-
+      LOAD DATABASE
+        FROM mysql://{{ mysql_user }}:{{ mysql_password }}@temp-mysql-transfer/{{ database }}
+        INTO postgresql://{{ pg_user }}:{{ pg_password }}@{{ green_pg_container }}:5432/{{ database }}
+
+      WITH include drop,
+           create tables,
+           create indexes,
+           reset sequences,
+           foreign keys,
+           workers = 8,
+           concurrency = 1,
+           multiple readers per thread,
+           rows per range = 50000
+
+      SET PostgreSQL PARAMETERS
+          maintenance_work_mem to '128MB',
+          work_mem to '12MB',
+          search_path to '{{ database }}, public, "$user"'
+
+      SET MySQL PARAMETERS
+          net_read_timeout  = '120',
+          net_write_timeout = '120'
+
+      CAST
+          type tinyint when (= precision 1) to boolean drop typemod using tinyint-to-boolean,
+          type tinyint to smallint drop typemod,
+
+          type datetime to timestamptz drop not null drop default using zero-dates-to-null,
+          type timestamp to timestamptz drop not null drop default using zero-dates-to-null,
+          type date to date drop default using zero-dates-to-null,
+          type year to integer drop typemod
+
+      ALTER SCHEMA '{{ database }}' RENAME TO 'public'
+
+      BEFORE LOAD DO
+        $$ create schema if not exists {{ database }}; $$,
+        $$ set search_path = {{ database }}, public; $$;
+
+- name: 11] Execute pgloader to transfer data from MySQL to PostgreSQL
+  shell: |
+    docker run --rm --platform linux/amd64 \
+      --network {{ blue_mysql_network }} \
+      --network {{ green_pg_network }} \
+      -v "{{ playbook_dir }}/mysql2pg.load:/mysql2pg.load:ro" \
+      ghcr.io/dimitri/pgloader:latest \
+      pgloader /mysql2pg.load 2>&1 | tee "{{ playbook_dir }}/logs/pgloader.log"
+
+- name: 12] Remove the temporary MySQL container
+  shell: docker rm -f temp-mysql-transfer

@@ -1,0 +1,12 @@
+- name: Stop and tear down the blue-green environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: "1) Detener y eliminar el stack Docker Compose (Nginx→blue/green)"
+      community.docker.docker_compose_v2:
+        project_src: "{{ playbook_dir }}"
+        files:
+          - docker-compose-proxy.yml
+        state: absent

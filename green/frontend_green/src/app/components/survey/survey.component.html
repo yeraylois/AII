@@ -1,0 +1,19 @@
+<app-header></app-header>
+
+<div class="survey-container">
+  <h2>ENCUESTA RÁPIDA</h2>
+  <form (ngSubmit)="submitAnswers()">
+    <div *ngFor="let question of questions">
+      <p>{{ question.text }}</p>
+      <input type="text" [(ngModel)]="answers[question.id]" name="response-{{question.id}}" required>
+    </div>
+    <button type="submit">Enviar Respuestas</button>
+  </form>
+
+  <app-custom-snackbar
+    *ngIf="showSnackbar"
+    [message]="snackbarMessage">
+  </app-custom-snackbar>
+</div>
+
+<app-footer></app-footer>

@@ -1,0 +1,51 @@
+networks:
+  green_network:
+    external: true
+
+services:
+  web_green:
+    build: .
+    command: sh -c "./wait-for-it.sh db-green:5432 -t 60 && python manage.py runserver 0.0.0.0:8000"
+    environment:
+      DATABASE_ENGINE: "postgresql"
+      DATABASE_NAME: "mydatabase"
+      DATABASE_USER: "myuser"
+      DATABASE_PASSWORD: "mypassword"
+      DATABASE_HOST: "db-green"
+      DATABASE_PORT: "5432"
+    volumes:
+      - backend_web_data_green:/app
+    ports:
+      - "8001:8000"
+    networks:
+      green_network:
+        aliases:
+          - web-green
+    depends_on:
+      - db-green
+
+  db-green:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    networks:
+      - green_network
+    volumes:
+      - postgres_data_green:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # INTERNAL:5432, EXTERNAL: 5433
+
+  postgres_exporter_green:
+    image: quay.io/prometheuscommunity/postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://myuser:mypassword@db-green:5432/mydatabase?sslmode=disable"
+    networks:
+      - green_network
+    ports:
+      - "9188:9187" # INTERNAL:9187, EXTERNAL: 9188
+
+volumes:
+  postgres_data_green:
+  backend_web_data_green:

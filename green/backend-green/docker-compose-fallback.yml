@@ -1,0 +1,55 @@
+services:
+  web_green:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DATABASE_ENGINE: "mysql"
+      DATABASE_NAME: "mydatabase"
+      DATABASE_USER: "myuser"
+      DATABASE_PASSWORD: "mypassword"
+      DATABASE_HOST: "db-green"
+      DATABASE_PORT: "3306"
+    volumes:
+      - backend_web_data_green:/app    # VOLUME
+    ports:
+      - "8001:8000"
+    networks:
+      green_network:
+        aliases:
+          - web-green
+    depends_on:
+      - db-green
+
+  db-green:
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+    environment:
+      MYSQL_DATABASE: mydatabase
+      MYSQL_USER: myuser
+      MYSQL_PASSWORD: mypassword
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3308:3306"  # INTERNAL:3306, EXTERNAL: 3307
+    networks:
+      - green_network
+
+  mysqld_exporter_green:
+    build:
+      context: .
+      dockerfile: Dockerfile.exporter
+    command:
+      - "--config.my-cnf=/root/my.cnf"
+    user: "0"  # EXECUTE AS ROOT TO GET PERMISSIONS
+    ports:
+      - "9105:9104" # INTERNAL:9104, EXTERNAL: 9104
+    networks:
+      - green_network
+
+volumes:
+  mysql_data_green:
+  backend_web_data_green:
+
+networks:
+  green_network:
+    external: true

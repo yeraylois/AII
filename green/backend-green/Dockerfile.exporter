@@ -1,0 +1,7 @@
+FROM prom/mysqld-exporter:latest
+
+# COPY THE CONFIGURATION FILE
+COPY my.cnf /root/my.cnf
+
+# ROOT USER
+USER 0

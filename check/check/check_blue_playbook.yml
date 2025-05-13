@@ -1,0 +1,66 @@
+- name: Check BLUE environment
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    blue_check: backend-postgres_exporter-1
+
+    blue_pg_container: backend-db-1
+    blue_pg_network:   my_network
+
+    blue_mysql_container: backend-db-1
+    blue_mysql_network:   my_network
+
+    green_pg_container: backend-green-db-green-1
+    green_pg_network:   green_network
+
+    mysql_user:     myuser
+    mysql_password: mypassword
+    mysql_root:     root
+    mysql_root_password: rootpassword
+    mysql_database: mydatabase
+
+    pg_user:        myuser
+    pg_password:    mypassword
+    database:       mydatabase
+    pg_database: mydatabase
+
+    logs_dir: "{{ playbook_dir }}/logs"
+
+    dump_file: /tmp/dump.sql
+
+  tasks:
+    - name: Check if the BLUE environment is running
+      community.docker.docker_container_info:
+        name: "{{ blue_check }}"
+      register: pg_info
+      ignore_errors: true
+
+    #- name: Show the returned info from pg_info
+    #  debug:
+    #    var: pg_info
+
+    - name: Set the environment variable for the active environment
+      set_fact:
+        active_env: >-
+          {{ (
+               pg_info.container is defined
+               and pg_info.container is not none
+               and pg_info.container.State.Running
+               and (blue_pg_network in pg_info.container.NetworkSettings.Networks)
+             )
+             | ternary('postgres', 'mysql')
+          }}
+
+    #- name: Active environment
+    #  debug:
+    #    msg: "Entorno activo → {{ active_env }}"
+
+    - name: Dump data from BLUE to GREEN using pgloader (PG→PG)
+      include_tasks: ../transfer/blue2green/transfer_postgres.yml
+      when: active_env == 'postgres'
+
+    - name: Dump data from BLUE to GREEN using pgloader (MYSQL→PG)
+      include_tasks: ../transfer/blue2green/transfer_mysql.yml
+      when: active_env == 'mysql'

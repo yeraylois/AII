@@ -1,0 +1,13 @@
+services:
+  survey:
+    build: .
+    ports:
+      - "4201:4200"
+    networks:
+      my_network:
+        aliases:
+          - blue_frontend  # ALIAS FOR BLUE CONTAINERS TO COMMUNICATE VIA THIS NETWORK (e.g., Nginx)
+
+networks:
+  my_network:
+    external: true
